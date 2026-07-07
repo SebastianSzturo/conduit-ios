@@ -770,10 +770,10 @@ struct ErrorMarkerRow: View {
 #Preview("Long prompt + queued") {
     VStack(spacing: 24) {
         UserPromptBubble(
-            text: String(repeating: "Make the tickets view a 3 column layout with sidebar minimized. ", count: 8),
+            text: String(repeating: "Make the onboarding view clearer without changing navigation. ", count: 8),
             queued: false
         )
-        UserPromptBubble(text: "Also fix the hydration bug", queued: true)
+        UserPromptBubble(text: "Also cover the empty state", queued: true)
     }
     .padding(16)
     .background(Theme.background)
