@@ -33,14 +33,14 @@ Built with SwiftUI for iOS 26, in the spirit of the Cursor mobile app.
 
 ## Getting started
 
-1. Open `Conduit/Conduit.xcodeproj` in Xcode.
+1. Open `Conduit.xcodeproj` in Xcode.
 2. Build and run the `Conduit` scheme.
 3. On first launch, open **Settings** and paste your Conductor API key (`sk_…`). The key is stored in the Keychain — never in source or UserDefaults.
 
 ## Architecture
 
 ```
-Conduit/Conduit/
+Conduit/
 ├── API/            ConductorAPI + ConductorClient — typed v0 REST client
 ├── Models/         Codable API models, transcript normalization
 ├── Services/       HomeStore, SessionStore, ResponseCache, ActivityLedger, AppSettings
