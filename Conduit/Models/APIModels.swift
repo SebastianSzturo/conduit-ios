@@ -30,8 +30,13 @@ nonisolated struct Workspace: Codable, Identifiable, Hashable, Sendable {
     let createdAt: String
     let deepLink: String
     let creatorId: String?
+    /// Raw Postgres timestamp of the most recent message across the workspace's
+    /// sessions. Optional: absent from older cached snapshots and for
+    /// workspaces with no messages yet.
+    let lastActivityAt: String?
 
     var createdAtDate: Date? { PostgresTimestamp.parse(createdAt) }
+    var lastActivityAtDate: Date? { lastActivityAt.flatMap(PostgresTimestamp.parse) }
 }
 
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
@@ -83,9 +88,23 @@ nonisolated struct SessionStatus: Codable, Hashable, Sendable {
     let sessionId: String
     let status: String
     let updatedAt: String
+    /// Transient, current-turn error detail. Often nil even while the session is
+    /// in the `error` state, so callers should fall back to `lastError`.
     let errorMessage: String?
+    /// The last error the session recorded, persisted by the server across polls
+    /// even after the transient `errorMessage` clears — the durable explanation
+    /// for an `error` state.
+    let lastError: String?
+    /// Raw Postgres timestamp of `lastError`, e.g. "2026-07-06 07:33:24.77353+00".
+    let lastErrorAt: String?
 
     var kind: SessionStatusKind { SessionStatusKind(rawValue: status) ?? .unknown }
+    var lastErrorAtDate: Date? { lastErrorAt.flatMap(PostgresTimestamp.parse) }
+
+    /// Best human-facing explanation for an `error` state: the transient
+    /// `errorMessage` if the server sent one this turn, else the persisted
+    /// `lastError`. Nil when the server offered neither.
+    var resolvedErrorMessage: String? { errorMessage ?? lastError }
 }
 
 // MARK: - Requests / responses

@@ -338,7 +338,7 @@ struct SessionView: View {
                     }
 
                     if let inlineError {
-                        ErrorMarkerRow(message: inlineError)
+                        ErrorMarkerRow(message: inlineError, timestamp: store.lastErrorAt)
                             .padding(.top, Self.itemSpacing)
                     }
 

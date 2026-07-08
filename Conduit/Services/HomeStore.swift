@@ -28,9 +28,14 @@ final class HomeStore {
         /// Primary (most recent) session of the workspace, when loaded.
         var session: Session?
         var sessionStatus: SessionStatusKind?
+        /// Short explanation carried from the session status poll when
+        /// `sessionStatus == .error`, so the row can hint at what went wrong
+        /// instead of showing a bare "Error". Cleared when no longer errored.
+        var sessionLastError: String? = nil
         var workspaceStatus: WorkspaceStatusKind?
-        /// Last trustworthy activity from the local ActivityLedger (newest
-        /// message timestamp or an observed working status).
+        /// Time of the most recent message across the workspace's sessions.
+        /// Seeded from the server's `Workspace.lastActivityAt` on refresh, then
+        /// bumped forward in-memory while a poll observes a working session.
         var lastActivityAt: Date? = nil
         /// When the user last opened this workspace (persisted).
         var lastSeenAt: Date? = nil
@@ -51,9 +56,25 @@ final class HomeStore {
             }
             switch sessionStatus {
             case .working: return "Working"
-            case .error: return "Error"
+            case .error:
+                if let hint = Self.errorHint(sessionLastError) { return "Error — \(hint)" }
+                return "Error"
             default: return "Idle"
             }
+        }
+
+        /// Condenses a raw error message into a single short line suitable for the
+        /// one-line row subtitle: first non-empty line, trimmed and truncated.
+        private static func errorHint(_ raw: String?) -> String? {
+            guard let raw else { return nil }
+            let firstLine = raw
+                .split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first(where: { !$0.isEmpty }) ?? ""
+            guard !firstLine.isEmpty else { return nil }
+            let limit = 48
+            guard firstLine.count > limit else { return firstLine }
+            return String(firstLine.prefix(limit)).trimmingCharacters(in: .whitespaces) + "…"
         }
 
         var isWorking: Bool { sessionStatus == .working }
@@ -186,7 +207,7 @@ final class HomeStore {
                 session: $0.session,
                 sessionStatus: nil,
                 workspaceStatus: nil,
-                lastActivityAt: ActivityLedger.activity(for: $0.workspace.id),
+                lastActivityAt: $0.workspace.lastActivityAtDate,
                 lastSeenAt: lastSeenByWorkspace[$0.workspace.id]
             )
         }
@@ -298,24 +319,28 @@ final class HomeStore {
                     session: session,
                     sessionStatus: nil,
                     workspaceStatus: statusKind,
-                    lastActivityAt: nil,
+                    lastActivityAt: workspace.lastActivityAtDate,
                     lastSeenAt: nil
                 ))
             }
         }
 
-        // Preserve any already-known session statuses across refreshes; activity
-        // always comes from the ledger. Workspace status is freshly fetched.
-        let previousStatuses = Dictionary(
-            items.map { ($0.id, $0.sessionStatus) },
+        // Preserve any already-known session statuses across refreshes; workspace
+        // status and last activity are freshly fetched (built already carries the
+        // server's lastActivityAt).
+        let previous = Dictionary(
+            items.map { ($0.id, $0) },
             uniquingKeysWith: { a, _ in a }
         )
         var merged = built
         for i in merged.indices {
-            if let prior = previousStatuses[merged[i].id] {
-                merged[i].sessionStatus = prior
+            if let prior = previous[merged[i].id] {
+                merged[i].sessionStatus = prior.sessionStatus
+                merged[i].sessionLastError = prior.sessionLastError
+                // Monotonic: never regress the server value below an in-flight
+                // working bump made since the previous refresh.
+                merged[i].lastActivityAt = maxDate(merged[i].lastActivityAt, prior.lastActivityAt)
             }
-            merged[i].lastActivityAt = ActivityLedger.activity(for: merged[i].id)
             merged[i].lastSeenAt = lastSeenByWorkspace[merged[i].id]
         }
 
@@ -337,7 +362,7 @@ final class HomeStore {
             session: nil,
             sessionStatus: nil,
             workspaceStatus: .archived,
-            lastActivityAt: ActivityLedger.activity(for: workspace.id),
+            lastActivityAt: workspace.lastActivityAtDate,
             lastSeenAt: lastSeenByWorkspace[workspace.id]
         )
     }
@@ -373,6 +398,7 @@ final class HomeStore {
         struct StatusUpdate: Sendable {
             let id: String
             let sessionStatus: SessionStatusKind?
+            let sessionLastError: String?
             let workspaceStatus: WorkspaceStatusKind?
         }
 
@@ -384,12 +410,15 @@ final class HomeStore {
                     async let ws = try? await api.workspaceStatus(workspaceID: wsID)
                     let wsKind = (await ws)?.kind
                     var sessKind: SessionStatusKind?
+                    var sessErr: String?
                     if let sessID, let status = try? await api.sessionStatus(sessionID: sessID) {
                         sessKind = status.kind
+                        if status.kind == .error { sessErr = status.resolvedErrorMessage }
                     }
                     return StatusUpdate(
                         id: wsID,
                         sessionStatus: sessKind,
+                        sessionLastError: sessErr,
                         workspaceStatus: wsKind
                     )
                 }
@@ -405,17 +434,21 @@ final class HomeStore {
             if let u = byID[items[i].id] {
                 if let s = u.sessionStatus {
                     items[i].sessionStatus = s
-                    // Observed working is a trustworthy activity signal.
-                    if s == .working { ActivityLedger.record(Date(), for: items[i].id) }
+                    // Keep the error hint only while errored; clear it otherwise
+                    // so a recovered session doesn't show a stale message.
+                    items[i].sessionLastError = (s == .error) ? u.sessionLastError : nil
+                    // Polls only fetch statuses, not workspace objects, so keep an
+                    // actively-working item rising in recency between full refreshes
+                    // by bumping its in-memory activity forward (never backward).
+                    if s == .working {
+                        items[i].lastActivityAt = maxDate(items[i].lastActivityAt, Date())
+                    }
                 }
                 if let w = u.workspaceStatus {
                     if w == .archived || w == .deleted { newlyArchivedIDs.insert(items[i].id) }
                     items[i].workspaceStatus = w
                 }
             }
-            // Re-read the ledger each cycle so SessionStore's writes (made while
-            // the user was inside a session) surface when they navigate back.
-            items[i].lastActivityAt = ActivityLedger.activity(for: items[i].id)
         }
         // Move newly-archived workspaces into the registry + archived list and
         // drop them from the cached snapshot right away.
@@ -476,6 +509,18 @@ final class HomeStore {
             }
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Later of two optional dates, treating `nil` as "no value". Used to keep
+    /// `lastActivityAt` monotonic when merging a fresh server value with an
+    /// in-flight working bump.
+    private func maxDate(_ a: Date?, _ b: Date?) -> Date? {
+        switch (a, b) {
+        case let (a?, b?): return max(a, b)
+        case let (a?, nil): return a
+        case let (nil, b?): return b
+        case (nil, nil): return nil
         }
     }
 

@@ -9,8 +9,8 @@ final class MockConductorAPI: ConductorAPI {
     ]
 
     static let sampleWorkspaces: [Workspace] = [
-        Workspace(id: "w1", name: "Improve onboarding", createdAt: "2026-07-07 05:30:00.1+00", deepLink: "conductor://workspace?id=w1", creatorId: nil),
-        Workspace(id: "w2", name: "Fix empty states", createdAt: "2026-07-05 09:00:00.1+00", deepLink: "conductor://workspace?id=w2", creatorId: nil),
+        Workspace(id: "w1", name: "Improve onboarding", createdAt: "2026-07-07 05:30:00.1+00", deepLink: "conductor://workspace?id=w1", creatorId: nil, lastActivityAt: "2026-07-07 06:10:00.1+00"),
+        Workspace(id: "w2", name: "Fix empty states", createdAt: "2026-07-05 09:00:00.1+00", deepLink: "conductor://workspace?id=w2", creatorId: nil, lastActivityAt: "2026-07-05 09:45:00.1+00"),
     ]
 
     static let sampleSessions: [Session] = [
@@ -61,15 +61,18 @@ final class MockConductorAPI: ConductorAPI {
     func renameSession(sessionID: String, name: String) async throws -> Session { Self.sampleSessions[0] }
 
     func sessionStatus(sessionID: String) async throws -> SessionStatus {
-        SessionStatus(workspaceId: "w1", sessionId: sessionID, status: "working", updatedAt: "2026-07-07 05:30:00.1+00", errorMessage: nil)
+        SessionStatus(workspaceId: "w1", sessionId: sessionID, status: "working", updatedAt: "2026-07-07 05:30:00.1+00", errorMessage: nil, lastError: nil, lastErrorAt: nil)
     }
 
     func cancelSession(sessionID: String) async throws -> CancelResponse {
         CancelResponse(workspaceId: "w1", sessionId: sessionID, status: "idle", canceledQueuedMessages: 0)
     }
 
-    func messages(sessionID: String, offset: Int, limit: Int) async throws -> Page<APIMessage> {
-        Page(data: [], offset: offset, hasMore: false)
+    func messages(sessionID: String, after: String?, limit: Int) async throws -> Page<APIMessage> {
+        // The mock has no sample `APIMessage` envelopes, so every fetch is empty
+        // regardless of the cursor. `after == nil` (from the start) and
+        // `after == someID` (only newer messages) both have nothing to return.
+        Page(data: [], offset: 0, hasMore: false)
     }
 
     func sendMessage(sessionID: String, text: String, clientMessageID: String) async throws -> SendMessageResponse {
