@@ -14,7 +14,7 @@ struct WorkspaceRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 12) {
-                indicator
+                WorkspaceStatusIndicator(item: item)
                     .frame(width: 18, height: 18)
                     .padding(.top, 2)
 
@@ -54,23 +54,6 @@ struct WorkspaceRow: View {
         }
     }
 
-    @ViewBuilder
-    private var indicator: some View {
-        if item.isWorking {
-            WorkingIndicator()
-        } else if item.isUnread {
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 8, height: 8)
-                .padding(5)
-        } else {
-            Circle()
-                .fill(Theme.textTertiary)
-                .frame(width: 8, height: 8)
-                .padding(5)
-        }
-    }
-
     private var subtitle: some View {
         HStack(spacing: 5) {
             Text(item.statusLabel)
@@ -93,6 +76,28 @@ struct WorkspaceRow: View {
             return ModelOption.displayName(for: model)
         }
         return nil
+    }
+}
+
+/// Leading status glyph shared by workspace rows: animated asterisk while
+/// working, accent dot when unread, dim dot otherwise.
+struct WorkspaceStatusIndicator: View {
+    let item: HomeStore.WorkspaceItem
+
+    var body: some View {
+        if item.isWorking {
+            WorkingIndicator()
+        } else if item.isUnread {
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 8, height: 8)
+                .padding(5)
+        } else {
+            Circle()
+                .fill(Theme.textTertiary)
+                .frame(width: 8, height: 8)
+                .padding(5)
+        }
     }
 }
 

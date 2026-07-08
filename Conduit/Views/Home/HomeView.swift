@@ -8,8 +8,8 @@ private enum HomeFilter: String, CaseIterable {
     case archived = "Archived"
 }
 
-/// The "All Repos" home screen: recents + per-project sections, search & filter,
-/// pull-to-refresh, and the floating composer.
+/// The "All Repos" home screen: recents + per-project sections, search sheet
+/// & filter, pull-to-refresh, and the floating composer.
 struct HomeView: View {
     let store: HomeStore
     let settings: AppSettings
@@ -17,8 +17,7 @@ struct HomeView: View {
     var onSubmitNewSession: (NewSessionRequest) -> Void
 
     @State private var composer: ComposerState
-    @State private var searchActive = false
-    @State private var searchText = ""
+    @State private var showSearch = false
     @State private var filter: HomeFilter = .all
     @State private var isComposerExpanded = false
     @State private var showSettings = false
@@ -62,12 +61,9 @@ struct HomeView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        searchActive.toggle()
-                        if !searchActive { searchText = "" }
-                    }
+                    showSearch = true
                 } label: {
-                    Image(systemName: searchActive ? "xmark" : "magnifyingglass")
+                    Image(systemName: "magnifyingglass")
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -95,6 +91,12 @@ struct HomeView: View {
         .onDisappear { store.stopPolling() }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(settings: settings)
+        }
+        .sheet(isPresented: $showSearch) {
+            SearchSheet(store: store) { item in
+                showSearch = false
+                onOpenWorkspace(item)
+            }
         }
         .overlay {
             if isComposerExpanded {
@@ -150,14 +152,8 @@ struct HomeView: View {
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if searchActive {
-                    searchField
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                }
-
                 if filter == .archived {
-                    let archived = store.archivedItems.filter { matchesSearch($0) }
+                    let archived = store.archivedItems
                     if !archived.isEmpty {
                         sectionHeader("Archived")
                         ForEach(archived) { item in
@@ -303,34 +299,14 @@ struct HomeView: View {
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(Theme.textSecondary)
-            TextField("Search", text: $searchText)
-                .foregroundStyle(Theme.textPrimary)
-                .autocorrectionDisabled()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Theme.inputField, in: Capsule())
-    }
-
     // MARK: Filtering
 
     private func filtered(_ items: [HomeStore.WorkspaceItem]) -> [HomeStore.WorkspaceItem] {
-        items.filter { matchesSearch($0) && matchesFilter($0) }
+        items.filter { matchesFilter($0) }
     }
 
     private var filteredRecents: [HomeStore.WorkspaceItem] {
         filtered(store.recents)
-    }
-
-    private func matchesSearch(_ item: HomeStore.WorkspaceItem) -> Bool {
-        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return true }
-        return item.title.lowercased().contains(q)
-            || item.project.repoSlug.lowercased().contains(q)
     }
 
     private func matchesFilter(_ item: HomeStore.WorkspaceItem) -> Bool {
