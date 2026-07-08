@@ -387,8 +387,17 @@ struct SessionView: View {
                 guard didInitialSettle else {
                     isNearBottom = true
                     hasNewActivity = false
-                    if state.scrollable && state.nearBottom {
-                        didInitialSettle = true
+                    if state.scrollable {
+                        if state.nearBottom {
+                            didInitialSettle = true
+                        } else {
+                            // Content became scrollable after the retry task
+                            // expired (session opened short, agent reply grew
+                            // it past the viewport): pin to the tail here so
+                            // new messages still autoscroll, converging on
+                            // nearBottom and settling on the next pass.
+                            scrollHandle.scrollTo(y: state.bottomOffset)
+                        }
                     }
                     return
                 }
