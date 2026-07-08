@@ -70,6 +70,13 @@ struct SessionView: View {
         return err
     }
 
+    /// True while the network catch-up is running behind a cache-hydrated
+    /// transcript. Fresh sessions with no cached items show the centered
+    /// spinner in the transcript instead.
+    private var isRefreshingCache: Bool {
+        store.isLoadingInitial && !store.items.isEmpty
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             Theme.background.ignoresSafeArea()
@@ -82,11 +89,14 @@ struct SessionView: View {
                 }
             }
 
-            VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 Spacer(minLength: 0)
                 if !isNearBottom && store.workspaceSetup == nil {
                     scrollToBottomPill
-                        .padding(.bottom, 6)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
+                if isRefreshingCache && store.workspaceSetup == nil {
+                    refreshingPill
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
                 SessionComposer(
@@ -102,6 +112,7 @@ struct SessionView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isNearBottom)
+        .animation(.easeInOut(duration: 0.18), value: isRefreshingCache)
         .toolbar { toolbarContent }
         .task { await store.start() }
         .onDisappear { store.stop() }
@@ -502,6 +513,26 @@ struct SessionView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(hasNewActivity ? "Scroll to bottom, new activity" : "Scroll to bottom")
+    }
+
+    /// Floating pill shown while cached transcript content is on screen and the
+    /// network catch-up is still running, so long sessions signal when they're
+    /// fully loaded.
+    private var refreshingPill: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.textSecondary)
+            Text("Updating…")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Theme.separator, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Updating messages")
     }
 
     // MARK: - Group dispatch
