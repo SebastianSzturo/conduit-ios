@@ -23,6 +23,14 @@ final class SessionStore: Identifiable {
     // Identity
     let workspaceID: String
     private(set) var sessionID: String?
+    /// Server-provided deep link for this session (e.g.
+    /// `conductor://workspace?id=<workspace>&session=<session>`), used by the
+    /// "Copy link" action. Nil until known (new-workspace flow before the
+    /// session's own link is fetched).
+    private(set) var deepLink: String?
+    /// The model id this session runs (drives the agent/model used when
+    /// spawning a sibling "new session" in the same workspace).
+    private(set) var modelID: String?
 
     // Presentation state (views bind to these)
     private(set) var title: String
@@ -53,6 +61,8 @@ final class SessionStore: Identifiable {
         self.api = api
         self.workspaceID = workspaceID
         self.sessionID = session.id
+        self.deepLink = session.deepLink
+        self.modelID = session.model
         if let name = session.name, !name.isEmpty {
             self.title = name
             self.titleIsGenericFallback = false
@@ -69,6 +79,8 @@ final class SessionStore: Identifiable {
         self.api = api
         self.workspaceID = created.workspaceId
         self.sessionID = created.sessionId
+        self.deepLink = created.deepLink
+        self.modelID = model.modelID
         self.title = project.name
         self.titleIsGenericFallback = true
         self.modelName = model.displayName
@@ -134,6 +146,8 @@ final class SessionStore: Identifiable {
 
         // Adopt the new session's identity.
         sessionID = session.id
+        deepLink = session.deepLink
+        modelID = session.model
         if let name = session.name, !name.isEmpty {
             title = name
             titleIsGenericFallback = false
@@ -516,6 +530,26 @@ final class SessionStore: Identifiable {
         }
         queuedMessages.removeAll()
         status = .idle
+    }
+
+    /// Creates a fresh session in the same workspace (same agent/model as this
+    /// one) and returns a store opened on it, ready to be pushed onto the nav
+    /// stack. Returns nil on failure (and surfaces the error on this store).
+    func createNewSession() async -> SessionStore? {
+        let option = ModelOption.named(modelID)
+        let agent = option?.agent ?? .claude
+        do {
+            let session = try await api.createSession(
+                workspaceID: workspaceID,
+                name: nil,
+                agent: agent,
+                model: modelID
+            )
+            return SessionStore(api: api, workspaceID: workspaceID, session: session)
+        } catch {
+            lastError = errorText(error)
+            return nil
+        }
     }
 
     func rename(to name: String) async {
