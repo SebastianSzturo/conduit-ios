@@ -37,6 +37,22 @@ Built with SwiftUI for iOS 26, in the spirit of the Cursor mobile app.
 2. Build and run the `Conduit` scheme.
 3. On first launch, open **Settings** and paste your Conductor API key (`sk_…`). The key is stored in the Keychain — never in source or UserDefaults.
 
+## API docs
+
+The static API reference lives at `api/index.html` and is generated from the public OpenAPI spec at `https://api.conductor.build/v0/openapi.json`.
+
+To refresh the checked-in docs and raw spec:
+
+```bash
+./api/update-api-docs.mjs
+```
+
+To generate from a different source URL:
+
+```bash
+./api/update-api-docs.mjs --source https://api.conductor.build/v0/openapi.json
+```
+
 ## Architecture
 
 ```
