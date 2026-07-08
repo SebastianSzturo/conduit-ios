@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Session detail screen: live agent transcript, follow-up composer with
 /// stop/cancel, queued-message handling, and the new-workspace setup hero.
@@ -14,6 +15,9 @@ import SwiftUI
 struct SessionView: View {
     let store: SessionStore
     let settings: AppSettings
+    /// Called with a store for a freshly created sibling session so the
+    /// integrator can push it onto the navigation stack.
+    var onNewSession: (SessionStore) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
 
@@ -152,11 +156,32 @@ struct SessionView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                // Not offered while the workspace is still provisioning — a
+                // sibling session can only be created once it exists.
+                if store.workspaceSetup == nil {
+                    Button {
+                        Task {
+                            if let created = await store.createNewSession() {
+                                onNewSession(created)
+                            }
+                        }
+                    } label: {
+                        Label("New session", systemImage: "plus.bubble")
+                    }
+                }
                 Button {
                     renameText = store.title
                     showRename = true
                 } label: {
                     Label("Rename", systemImage: "pencil")
+                }
+                // Desktop-only: copy a deep link to this session to the clipboard.
+                if isDesktop, let link = store.deepLink {
+                    Button {
+                        copyLink(link)
+                    } label: {
+                        Label("Copy link", systemImage: "link")
+                    }
                 }
                 if store.isWorking {
                     Button(role: .destructive) {
@@ -169,6 +194,18 @@ struct SessionView: View {
                 Image(systemName: "ellipsis")
             }
         }
+    }
+
+    /// True when running in a desktop-class environment (Mac via Catalyst),
+    /// where a clipboard link is useful. On iPhone/iPad the native share flow
+    /// differs, so "Copy link" is scoped to desktop per the design.
+    private var isDesktop: Bool {
+        ProcessInfo.processInfo.isMacCatalystApp
+    }
+
+    /// Copies the session deep link to the system clipboard.
+    private func copyLink(_ link: String) {
+        UIPasteboard.general.string = link
     }
 
     /// Display name for a session in the switcher menu.

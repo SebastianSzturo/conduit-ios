@@ -29,10 +29,16 @@ struct ContentView: View {
                 }
             )
             .navigationDestination(for: SessionRoute.self) { route in
-                SessionView(store: route.store, settings: settings)
-                    // Popping back to home clears the unread dot for the
-                    // session the user just viewed.
-                    .onDisappear { homeStore.markSeen(workspaceID: route.store.workspaceID) }
+                SessionView(
+                    store: route.store,
+                    settings: settings,
+                    onNewSession: { newStore in
+                        path.append(SessionRoute(store: newStore))
+                    }
+                )
+                // Popping back to home clears the unread dot for the
+                // session the user just viewed.
+                .onDisappear { homeStore.markSeen(workspaceID: route.store.workspaceID) }
             }
         }
         .tint(Theme.textPrimary)
