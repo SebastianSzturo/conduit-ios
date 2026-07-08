@@ -716,6 +716,9 @@ struct WorkingShimmerRow: View {
 /// status is `.error` — separate from the dismissible composer banner.
 struct ErrorMarkerRow: View {
     let message: String
+    /// When the error occurred, if the server reported it. Shows a subtle
+    /// relative-time hint ("5m") so a lingering error reads as timestamped.
+    var timestamp: Date? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -727,6 +730,11 @@ struct ErrorMarkerRow: View {
                 .foregroundStyle(Theme.error)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let timestamp {
+                Text(relativeTimeLabel(timestamp))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+            }
         }
         .accessibilityElement(children: .combine)
     }

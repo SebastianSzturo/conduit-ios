@@ -33,6 +33,11 @@ final class SessionStore: Identifiable {
     private(set) var queuedMessages: [QueuedMessage] = []
     private(set) var isLoadingInitial = false
     private(set) var lastError: String?
+    /// When the server-reported session error occurred, when known. Drives the
+    /// relative-time hint on the inline error marker. Nil for local action
+    /// errors (send/cancel/rename) and setup-phase errors, which have no
+    /// server timestamp.
+    private(set) var lastErrorAt: Date?
     /// All sessions in this workspace (drives the nav-title session switcher).
     private(set) var availableSessions: [Session] = []
     /// True while the agent is actively producing events (drives the stop button
@@ -80,8 +85,12 @@ final class SessionStore: Identifiable {
     /// Raw envelopes accumulated across polls (append-only). `items` is rebuilt
     /// from this on every change.
     private var rawMessages: [APIMessage] = []
-    /// Offset for the next messages page (== number already fetched).
-    private var messageOffset = 0
+    /// Cursor for the next messages fetch: the id of the last envelope held.
+    /// Messages arrive in ascending `sessionIndex` order and `rawMessages` is
+    /// append-only, so its last id is exactly the exclusive `after` cursor.
+    /// Derived (never stored) so it cannot desync from the transcript — e.g.
+    /// resetting `rawMessages = []` automatically resets the cursor to nil.
+    private var messageCursor: String? { rawMessages.last?.id }
     private var loopTask: Task<Void, Never>?
     /// clientMessageIDs of optimistic user prompts we have appended locally,
     /// so we can dedupe when the real envelope arrives.
@@ -122,14 +131,15 @@ final class SessionStore: Identifiable {
         guard session.id != sessionID else { return }
         stop()
 
-        // Reset transcript state.
+        // Reset transcript state. Clearing `rawMessages` also resets the
+        // message cursor, since it is derived from `rawMessages.last`.
         rawMessages = []
-        messageOffset = 0
         items = []
         queuedMessages = []
         optimisticPromptIDs = []
         status = .idle
         lastError = nil
+        lastErrorAt = nil
         statusRefreshCount = 0
 
         // Adopt the new session's identity.
@@ -302,17 +312,16 @@ final class SessionStore: Identifiable {
 
     /// Reads the cached transcript + session list synchronously (disk only, no
     /// network). Called before anything else so reopened sessions render
-    /// immediately; the network fetch then resumes from `messageOffset`.
+    /// immediately; the network fetch then resumes from the cached transcript's
+    /// last message id (`messageCursor`).
     private func hydrateFromCache() {
         guard !cacheDisabled else { return }
         if rawMessages.isEmpty,
            let cached = ResponseCache.load([APIMessage].self, key: messagesCacheKey),
            !cached.isEmpty {
             rawMessages = cached
-            messageOffset = cached.count
             rebuildItems()
             deriveTitleFromTranscriptIfNeeded()
-            recordNewestMessageActivity()
         }
         if availableSessions.isEmpty,
            let cachedSessions = ResponseCache.load([Session].self, key: sessionsCacheKey) {
@@ -335,17 +344,18 @@ final class SessionStore: Identifiable {
         defer { isLoadingInitial = false }
 
         // Already hydrated from disk in phase 0; fetch only what was appended
-        // since (messages are append-only).
-        let cachedCount = rawMessages.count
+        // since (messages are append-only), resuming from the cached
+        // transcript's last message id.
+        let hadCache = !rawMessages.isEmpty
 
-        let ok = await fetchMessagePages(sessionID: sessionID, from: cachedCount)
-        if !ok, cachedCount > 0 {
-            // The page at the cached offset failed: distrust the cache and do
-            // the full from-zero fetch.
+        let ok = await fetchMessagePages(sessionID: sessionID, after: messageCursor)
+        if !ok, hadCache {
+            // The first page of the resumed fetch failed: distrust the cache and
+            // do the full from-scratch fetch. This also covers a server that
+            // 4xxes on an unknown/pruned cursor id (any error is a page failure).
             ResponseCache.remove(key: messagesCacheKey)
             rawMessages = []
-            messageOffset = 0
-            _ = await fetchMessagePages(sessionID: sessionID, from: 0)
+            _ = await fetchMessagePages(sessionID: sessionID, after: nil)
         }
         rebuildItems()
         deriveTitleFromTranscriptIfNeeded()
@@ -354,23 +364,23 @@ final class SessionStore: Identifiable {
         await refreshStatus()
     }
 
-    /// Fetches message pages starting at `offset`, appending into `rawMessages`
-    /// and advancing `messageOffset`. Returns false if the first page fails.
-    private func fetchMessagePages(sessionID: String, from offset: Int) async -> Bool {
-        var offset = offset
+    /// Fetches message pages starting after `after` (nil == from the beginning),
+    /// appending into `rawMessages` and advancing the cursor to the last id of
+    /// each page. Returns false if the first page fails.
+    private func fetchMessagePages(sessionID: String, after: String?) async -> Bool {
+        var after = after
         var isFirstPage = true
         while !Task.isCancelled {
-            guard let page = try? await api.messages(sessionID: sessionID, offset: offset, limit: 100) else {
+            guard let page = try? await api.messages(sessionID: sessionID, after: after, limit: 100) else {
                 if isFirstPage {
-                    lastError = "Failed to load messages"
+                    lastError = "Couldn't load messages — check your connection and try again."
                     return false
                 }
                 break
             }
             isFirstPage = false
             rawMessages.append(contentsOf: page.data)
-            offset += page.data.count
-            messageOffset = offset
+            after = page.data.last?.id ?? after
             if !page.hasMore || page.data.isEmpty { break }
         }
         return true
@@ -380,26 +390,19 @@ final class SessionStore: Identifiable {
     private func saveMessagesToCache() {
         guard !cacheDisabled, sessionID != nil, !rawMessages.isEmpty else { return }
         ResponseCache.save(rawMessages, key: messagesCacheKey)
-        recordNewestMessageActivity()
-    }
-
-    /// Feeds the newest envelope's timestamp into the activity ledger (a
-    /// trustworthy per-workspace last-activity signal).
-    private func recordNewestMessageActivity() {
-        guard let newest = rawMessages.compactMap(\.receivedAtDate).max() else { return }
-        ActivityLedger.record(newest, for: workspaceID)
     }
 
     private func pollOnce() async {
         guard let sessionID else { return }
-        // Fetch any new envelopes appended since last offset.
+        // Fetch any new envelopes appended since the last known message id.
+        // `messageCursor` is derived from `rawMessages.last`, so each append
+        // advances it for the next iteration automatically.
         var appended = false
         while !Task.isCancelled {
-            guard let page = try? await api.messages(sessionID: sessionID, offset: messageOffset, limit: 100)
+            guard let page = try? await api.messages(sessionID: sessionID, after: messageCursor, limit: 100)
             else { break }
             if !page.data.isEmpty {
                 rawMessages.append(contentsOf: page.data)
-                messageOffset += page.data.count
                 appended = true
             }
             if !page.hasMore || page.data.isEmpty { break }
@@ -421,10 +424,19 @@ final class SessionStore: Identifiable {
         }
         guard let status = try? await api.sessionStatus(sessionID: sessionID) else { return }
         self.status = status.kind
-        if status.kind == .working {
-            ActivityLedger.record(Date(), for: workspaceID)
+        if status.kind == .error {
+            // The server put the session in `error` state, so always surface the
+            // best explanation it can give — the transient detail, else the
+            // persisted reason, else a generic line so the banner is never blank.
+            lastError = status.resolvedErrorMessage ?? "The agent hit an error"
+            lastErrorAt = status.lastErrorAtDate
+        } else {
+            // Not errored: a transient server `errorMessage` still shows if
+            // present (preserving prior precedence), otherwise clear. Local
+            // action errors are cleared by the next poll just as before.
+            lastError = status.errorMessage
+            lastErrorAt = nil
         }
-        lastError = status.errorMessage ?? (status.kind == .error ? lastError : nil)
         // Pick up a renamed session title. A non-empty server name always wins
         // over any locally-derived placeholder.
         if let session = try? await api.session(sessionID: sessionID),

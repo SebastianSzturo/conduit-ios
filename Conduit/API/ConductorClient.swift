@@ -103,8 +103,16 @@ final class ConductorClient: ConductorAPI {
 
     // MARK: - Messages
 
-    func messages(sessionID: String, offset: Int, limit: Int) async throws -> Page<APIMessage> {
-        try await getPage(path: "/sessions/\(esc(sessionID))/messages", limit: limit, offset: offset)
+    func messages(sessionID: String, after: String?, limit: Int) async throws -> Page<APIMessage> {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        // The API forbids combining `after` with `offset`: send `after` when we
+        // have a cursor, otherwise fall back to `offset=0` to read from the start.
+        if let after {
+            query.append(URLQueryItem(name: "after", value: after))
+        } else {
+            query.append(URLQueryItem(name: "offset", value: "0"))
+        }
+        return try await get(path: "/sessions/\(esc(sessionID))/messages", query: query)
     }
 
     func sendMessage(sessionID: String, text: String, clientMessageID: String) async throws -> SendMessageResponse {
