@@ -22,7 +22,29 @@ final class ConductorClient: ConductorAPI {
 
     func identity(apiKey: String) async throws -> Identity {
         let request = try makeRequest(url: url(path: "/me"), method: "GET", apiKey: apiKey)
-        return try await perform(request)
+        do {
+            return try await perform(request)
+        } catch APIError.http(status: 404, structured: _, diagnostics: _) {
+            // `/me` is not deployed on every Conductor API environment yet.
+            // Validate the draft credential against the same paginated
+            // projects endpoint the app needs to boot instead. A bad key still
+            // fails with its original 401/403 and is never persisted.
+            let projectsURL = url(
+                path: "/projects",
+                query: [
+                    URLQueryItem(name: "limit", value: "1"),
+                    URLQueryItem(name: "offset", value: "0"),
+                ]
+            )
+            let projectsRequest = try makeRequest(url: projectsURL, method: "GET", apiKey: apiKey)
+            let _: Page<Project> = try await perform(projectsRequest)
+            return Identity(
+                userId: "Connected",
+                email: nil,
+                organizationId: nil,
+                authMethod: "api-key"
+            )
+        }
     }
 
     func modelCapabilities() async throws -> ModelCapabilitiesResponse {

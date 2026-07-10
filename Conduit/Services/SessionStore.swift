@@ -196,9 +196,7 @@ final class SessionStore: Identifiable {
             titleIsGenericFallback = true
         }
         modelName = ModelOption.displayName(for: session.model)
-        if let name = session.name, !name.isEmpty {
-            publishSessionUpdate(session)
-        }
+        publishSessionUpdate(session)
 
         // Restart the run loop (stop() above guarantees no double loops).
         loopTask = Task { [weak self] in

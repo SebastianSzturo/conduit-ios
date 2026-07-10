@@ -143,6 +143,7 @@ final class HomeStore {
     private static let pinnedProjectsKey = "pinnedProjectIDs"
     private static let snapshotCacheKey = "home-snapshot"
     private static let lastSeenKey = "lastSeenByWorkspace"
+    private static let selectedSessionsKey = "selectedSessionByWorkspace"
     private static let archivedIDsKey = "archivedWorkspaceIDs"
 
     /// One-way registry of workspace IDs known to be archived (persisted).
@@ -151,6 +152,8 @@ final class HomeStore {
 
     /// Per-workspace "last opened" timestamps (persisted).
     private var lastSeenByWorkspace: [String: Date] = [:]
+    /// The session the user most recently opened in each workspace (persisted).
+    private var selectedSessionByWorkspace: [String: String] = [:]
 
     init(api: ConductorAPI) {
         self.api = api
@@ -159,6 +162,8 @@ final class HomeStore {
         if let stored = UserDefaults.standard.dictionary(forKey: Self.lastSeenKey) as? [String: Double] {
             lastSeenByWorkspace = stored.mapValues { Date(timeIntervalSince1970: $0) }
         }
+        selectedSessionByWorkspace = UserDefaults.standard.dictionary(forKey: Self.selectedSessionsKey)
+            as? [String: String] ?? [:]
         self.archivedWorkspaceIDs = Set(
             UserDefaults.standard.stringArray(forKey: Self.archivedIDsKey) ?? []
         )
@@ -191,6 +196,15 @@ final class HomeStore {
         if let idx = items.firstIndex(where: { $0.id == workspaceID }) {
             items[idx].lastSeenAt = now
         }
+    }
+
+    /// Makes this session the workspace's durable navigation target. The home
+    /// row and status polling follow the same selection so returning to a
+    /// workspace reopens exactly where the user left it.
+    func selectSession(_ session: Session, workspaceID: String) {
+        selectedSessionByWorkspace[workspaceID] = session.id
+        UserDefaults.standard.set(selectedSessionByWorkspace, forKey: Self.selectedSessionsKey)
+        updateSession(session, workspaceID: workspaceID)
     }
 
     // MARK: - Home snapshot cache
@@ -304,6 +318,7 @@ final class HomeStore {
         // Known-archived workspaces cost zero network calls: build lightweight
         // items straight from the list payload.
         let knownArchivedIDs = archivedWorkspaceIDs
+        let selectedSessionIDs = selectedSessionByWorkspace
         var archivedBuilt: [WorkspaceItem] = refs
             .filter { knownArchivedIDs.contains($0.workspace.id) }
             .map { archivedItem(workspace: $0.workspace, project: $0.project) }
@@ -324,7 +339,10 @@ final class HomeStore {
             let sessionResult: SessionRefreshResult
             do {
                 let sessions = try await api.sessions(workspaceID: ref.workspace.id)
-                sessionResult = .loaded(await Self.primarySession(in: sessions, api: api))
+                sessionResult = .loaded(Self.preferredSession(
+                    in: sessions,
+                    selectedID: selectedSessionIDs[ref.workspace.id]
+                ))
             } catch {
                 sessionResult = .failed
             }
@@ -432,17 +450,23 @@ final class HomeStore {
     func primarySession(for item: WorkspaceItem) async -> Session? {
         if let session = item.session { return session }
         guard let sessions = try? await api.sessions(workspaceID: item.workspace.id) else { return nil }
-        return await Self.primarySession(in: sessions, api: api)
+        return Self.preferredSession(
+            in: sessions,
+            selectedID: selectedSessionByWorkspace[item.workspace.id]
+        )
     }
 
-    /// Uses the API's first session. Sorting by individually fetching every
-    /// session status caused an unbounded refresh fan-out; the planned mobile
-    /// summary endpoint should provide an explicit primary session server-side.
-    private static func primarySession(
+    /// Uses the user's last selection when it still exists, otherwise the API's
+    /// first session. This avoids per-session status fan-out while keeping the
+    /// home row and navigation target stable across refreshes and launches.
+    private static func preferredSession(
         in sessions: [Session],
-        api: ConductorAPI
-    ) async -> Session? {
-        sessions.first
+        selectedID: String?
+    ) -> Session? {
+        if let selectedID, let selected = sessions.first(where: { $0.id == selectedID }) {
+            return selected
+        }
+        return sessions.first
     }
 
     /// Starts periodic status polling for visible working items.

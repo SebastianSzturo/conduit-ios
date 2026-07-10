@@ -14,7 +14,10 @@ struct HomeView: View {
     let store: HomeStore
     let settings: AppSettings
     var onOpenWorkspace: (HomeStore.WorkspaceItem) -> Void
-    var onSubmitNewSession: (NewSessionRequest) async throws -> Void
+    var onSubmitNewSession: (
+        NewSessionRequest,
+        @escaping (Result<Void, Error>) -> Void
+    ) -> Void
 
     @State private var composer: ComposerState
     @State private var showSearch = false
@@ -34,7 +37,10 @@ struct HomeView: View {
         store: HomeStore,
         settings: AppSettings,
         onOpenWorkspace: @escaping (HomeStore.WorkspaceItem) -> Void,
-        onSubmitNewSession: @escaping (NewSessionRequest) async throws -> Void
+        onSubmitNewSession: @escaping (
+            NewSessionRequest,
+            @escaping (Result<Void, Error>) -> Void
+        ) -> Void
     ) {
         self.store = store
         self.settings = settings
@@ -459,7 +465,7 @@ private func homeViewPreview() -> some View {
             store: HomeStore(api: MockConductorAPI()),
             settings: AppSettings(),
             onOpenWorkspace: { _ in },
-            onSubmitNewSession: { _ in }
+            onSubmitNewSession: { _, completion in completion(.success(())) }
         )
     }
 }
