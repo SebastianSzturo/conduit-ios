@@ -23,7 +23,6 @@ struct UserPromptBubble: View {
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(isLong && !expanded ? 6 : nil)
                     .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(Theme.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -103,28 +102,34 @@ struct MarkdownText: View {
                 blockView(block)
             }
         }
-        .textSelection(.enabled)
     }
 
     @ViewBuilder
     private func blockView(_ block: MarkdownBlock) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(Self.inlineAttributed(text))
-                .font(.system(size: Self.headingSize(level), weight: .bold))
-                .foregroundStyle(Theme.textPrimary)
+            SelectableText(
+                Self.inlineAttributed(text),
+                font: .systemFont(ofSize: Self.headingSize(level), weight: .bold),
+                color: UIColor(Theme.textPrimary)
+            )
                 .padding(.top, 2)
-                .fixedSize(horizontal: false, vertical: true)
 
         case .paragraph(let text):
-            Text(Self.inlineAttributed(text))
-                .fixedSize(horizontal: false, vertical: true)
+            SelectableText(
+                Self.inlineAttributed(text),
+                font: .systemFont(ofSize: 16),
+                color: UIColor(Theme.textPrimary)
+            )
 
         case .codeBlock(let code):
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundStyle(Theme.textPrimary)
+                SelectableText(
+                    AttributedString(code),
+                    font: .monospacedSystemFont(ofSize: 14, weight: .regular),
+                    color: UIColor(Theme.textPrimary),
+                    usesIntrinsicWidth: true
+                )
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -136,9 +141,12 @@ struct MarkdownText: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("•")
                             .foregroundStyle(Theme.textSecondary)
-                        Text(Self.inlineAttributed(item.text))
+                        SelectableText(
+                            Self.inlineAttributed(item.text),
+                            font: .systemFont(ofSize: 16),
+                            color: UIColor(Theme.textPrimary)
+                        )
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(item.depth) * 16)
                 }
@@ -151,9 +159,12 @@ struct MarkdownText: View {
                         Text("\(item.number).")
                             .foregroundStyle(Theme.textSecondary)
                             .monospacedDigit()
-                        Text(Self.inlineAttributed(item.text))
+                        SelectableText(
+                            Self.inlineAttributed(item.text),
+                            font: .systemFont(ofSize: 16),
+                            color: UIColor(Theme.textPrimary)
+                        )
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -163,12 +174,13 @@ struct MarkdownText: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Theme.separator)
                     .frame(width: 3)
-                Text(Self.inlineAttributed(text))
-                    .foregroundStyle(Theme.textSecondary)
+                SelectableText(
+                    Self.inlineAttributed(text),
+                    font: .systemFont(ofSize: 16),
+                    color: UIColor(Theme.textSecondary)
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -199,6 +211,108 @@ struct MarkdownText: View {
             attributed[run.range].font = .system(size: 15, design: .monospaced)
         }
         return attributed
+    }
+}
+
+/// UIKit-backed read-only text gives iOS the same granular selection handles as
+/// Safari and Notes. SwiftUI's `.textSelection(.enabled)` selects an entire
+/// `Text` view at once, which only surfaces the Copy/Share menu for our
+/// block-based markdown renderer.
+private struct SelectableText: UIViewRepresentable {
+    let content: AttributedString
+    let font: UIFont
+    let color: UIColor
+    let usesIntrinsicWidth: Bool
+
+    init(
+        _ content: AttributedString,
+        font: UIFont,
+        color: UIColor,
+        usesIntrinsicWidth: Bool = false
+    ) {
+        self.content = content
+        self.font = font
+        self.color = color
+        self.usesIntrinsicWidth = usesIntrinsicWidth
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        let attributed = uiKitAttributedText
+        if !uiView.attributedText.isEqual(to: attributed) {
+            uiView.attributedText = attributed
+        }
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: UITextView,
+        context: Context
+    ) -> CGSize? {
+        if usesIntrinsicWidth {
+            let bounds = uiKitAttributedText.boundingRect(
+                with: CGSize(
+                    width: CGFloat.greatestFiniteMagnitude,
+                    height: CGFloat.greatestFiniteMagnitude
+                ),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                context: nil
+            )
+            return CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
+        }
+
+        guard let width = proposal.width, width.isFinite else { return nil }
+        let size = uiView.sizeThatFits(
+            CGSize(width: width, height: .greatestFiniteMagnitude)
+        )
+        return CGSize(width: width, height: ceil(size.height))
+    }
+
+    private var uiKitAttributedText: NSAttributedString {
+        let result = NSMutableAttributedString()
+        for run in content.runs {
+            let string = String(content[run.range].characters)
+            var runFont = font
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                runFont = .monospacedSystemFont(ofSize: max(12, font.pointSize - 1), weight: .regular)
+            } else {
+                var traits = font.fontDescriptor.symbolicTraits
+                if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true {
+                    traits.insert(.traitBold)
+                }
+                if run.inlinePresentationIntent?.contains(.emphasized) == true {
+                    traits.insert(.traitItalic)
+                }
+                if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) {
+                    runFont = UIFont(descriptor: descriptor, size: font.pointSize)
+                }
+            }
+
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: runFont,
+                .foregroundColor: color,
+            ]
+            if run.inlinePresentationIntent?.contains(.strikethrough) == true {
+                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            }
+            if let link = run.link {
+                attributes[.link] = link
+            }
+            result.append(NSAttributedString(string: string, attributes: attributes))
+        }
+        return result
     }
 }
 

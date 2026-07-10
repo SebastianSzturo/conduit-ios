@@ -17,7 +17,7 @@ nonisolated enum ComposerMode: String, CaseIterable, Hashable, Sendable {
 /// The payload the composer hands to the integrator when the user hits send.
 /// The integrator is responsible for POST /workspaces + posting the initial
 /// prompt and navigating to the session view.
-nonisolated struct NewSessionRequest: Hashable {
+nonisolated struct NewSessionRequest: Hashable, Sendable {
     let project: Project
     let branch: String?
     let prompt: String

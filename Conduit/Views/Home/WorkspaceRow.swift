@@ -1,11 +1,11 @@
 import SwiftUI
 
 /// A single workspace/session row in the home list.
-/// Layout: status indicator · title (white) / subtitle "status · model-or-repo"
+/// Layout: status indicator · title (white) / subtitle "status · model · repo"
 /// with trailing relative time.
 struct WorkspaceRow: View {
     let item: HomeStore.WorkspaceItem
-    /// When true (repo sections) the repo name is redundant, so show model instead.
+    /// When true (Recents), include repository context after the model name.
     var showsRepoInSubtitle: Bool = true
     var onTap: () -> Void
     var onRename: () -> Void
@@ -58,24 +58,25 @@ struct WorkspaceRow: View {
         HStack(spacing: 5) {
             Text(item.statusLabel)
                 .foregroundStyle(item.isWorking ? Theme.textPrimary : Theme.textSecondary)
-            if let trailing = trailingDetail {
+            ForEach(Array(trailingDetails.enumerated()), id: \.offset) { _, detail in
                 Text("·")
                     .foregroundStyle(Theme.textTertiary)
-                Text(trailing)
+                Text(detail)
                     .foregroundStyle(Theme.textSecondary)
             }
         }
         .font(.system(size: 14))
     }
 
-    private var trailingDetail: String? {
-        if showsRepoInSubtitle {
-            return item.project.repoSlug
-        }
+    private var trailingDetails: [String] {
+        var details: [String] = []
         if let model = item.session?.model {
-            return ModelOption.displayName(for: model)
+            details.append(ModelOption.displayName(for: model) ?? model)
         }
-        return nil
+        if showsRepoInSubtitle {
+            details.append(item.project.repoSlug)
+        }
+        return details
     }
 }
 

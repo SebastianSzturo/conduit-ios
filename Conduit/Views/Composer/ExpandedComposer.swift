@@ -7,7 +7,10 @@ struct ExpandedComposer: View {
     @Bindable var composer: ComposerState
     /// Completes only after workspace creation succeeds. A failure leaves the
     /// draft and composer open so the user can retry without retyping.
-    var onSubmit: (NewSessionRequest) async throws -> Void
+    var onSubmit: (
+        NewSessionRequest,
+        @escaping (Result<Void, Error>) -> Void
+    ) -> Void
     /// Dismisses the expanded composer without sending.
     var onDismiss: () -> Void
 
@@ -141,14 +144,14 @@ struct ExpandedComposer: View {
         guard let request = composer.makeRequest() else { return }
         isSubmitting = true
         submitError = nil
-        Task {
-            defer { isSubmitting = false }
-            do {
-                try await onSubmit(request)
+        onSubmit(request) { result in
+            isSubmitting = false
+            switch result {
+            case .success:
                 composer.reset()
                 promptFocused = false
                 onDismiss()
-            } catch {
+            case .failure(let error):
                 submitError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 promptFocused = true
             }
@@ -165,7 +168,12 @@ private func expandedComposerPreview() -> some View {
         Theme.background.ignoresSafeArea()
         VStack {
             Spacer()
-            ExpandedComposer(store: store, composer: composer, onSubmit: { _ in }, onDismiss: {})
+            ExpandedComposer(
+                store: store,
+                composer: composer,
+                onSubmit: { _, completion in completion(.success(())) },
+                onDismiss: {}
+            )
                 .padding(16)
         }
     }

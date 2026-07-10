@@ -61,7 +61,7 @@ final class AppSettings {
     private static let keychainService = "build.conductor.conduit"
     private static let keychainAccount = "apiKey"
 
-    /// Persists a key only after the caller has validated it with `/me`.
+    /// Persists a key only after the caller has validated it with the API.
     func saveValidatedAPIKey(_ key: String, identity: Identity) throws {
         try Self.saveAPIKey(key)
         apiKey = key

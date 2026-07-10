@@ -38,13 +38,21 @@ struct SessionView: View {
     @State private var hasNewActivity = false
     /// Bumped when the jump-to-bottom pill is tapped.
     @State private var scrollRequestToken = 0
-    /// Programmatic scroll handle; `scrollTo(edge: .bottom)` targets the true
-    /// content bottom (ScrollViewReader's anchor math lands short of the tail
-    /// when the nav-bar safe-area inset is in flux).
+    /// Programmatic scroll handle. Always use its edge-based API for pinning:
+    /// `scrollTo(y:)` applies this binding's `.bottom` anchor to a content
+    /// coordinate, so passing a calculated offset lands one viewport short.
     @State private var scrollHandle = ScrollPosition(edge: .bottom)
     /// True once the view has actually settled at the bottom of scrollable
     /// content; until then, content growth keeps force-pinning to the tail.
     @State private var didInitialSettle = false
+    /// Actual height of the controls floating over the transcript. The
+    /// composer grows when focused or when queue/error status is present, so a
+    /// fixed spacer can leave the last message hidden underneath it.
+    @State private var bottomOverlayHeight: CGFloat = 120
+    /// Height currently available to the session content. This shrinks with
+    /// keyboard avoidance and gives the composer a device-independent drag
+    /// target without hard-coding a phone size.
+    @State private var composerContainerHeight: CGFloat = 500
     /// Number of newest rows rendered; grows via "Show earlier messages".
     @State private var rowWindow = SessionView.rowWindowStep
     static let rowWindowStep = 150
@@ -52,25 +60,22 @@ struct SessionView: View {
     /// Near-bottom tracking payload for `onScrollGeometryChange`.
     private struct ScrollState: Equatable {
         var nearBottom: Bool
+        var atBottom: Bool
         var scrollable: Bool
         var contentHeight: CGFloat
         var containerHeight: CGFloat
-        var insetTop: CGFloat
-
-        /// Scroll offset that puts the content's tail flush with the viewport.
-        /// ScrollGeometry's container excludes the safe-area insets and its
-        /// offset is inset-top-relative, so bottom rest = content − container −
-        /// top inset (verified empirically on iOS 26).
-        var bottomOffset: CGFloat { contentHeight - containerHeight - insetTop }
     }
 
-    /// Latest observed geometry, for computing exact pin targets outside the
-    /// geometry callback (e.g. the initial-settle retry task).
+    /// Latest observed geometry, so the initial-settle retry task only runs
+    /// once the transcript has become scrollable.
     @State private var lastScrollState: ScrollState?
 
     private let bottomAnchor = "transcript-bottom"
     /// How close (pt) to the bottom still counts as "at bottom".
     private let nearBottomThreshold: CGFloat = 80
+    /// Breathing room between the transcript tail and whichever floating
+    /// control is currently lowest over it (refresh status or composer).
+    private let transcriptBottomGap: CGFloat = 20
 
     private var visibleError: String? {
         guard let err = store.lastError, err != dismissedError else { return nil }
@@ -97,7 +102,6 @@ struct SessionView: View {
             }
 
             VStack(spacing: 8) {
-                Spacer(minLength: 0)
                 if !isNearBottom && store.workspaceSetup == nil {
                     scrollToBottomPill
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
@@ -111,16 +115,27 @@ struct SessionView: View {
                     isWorking: store.isWorking,
                     queuedCount: store.queuedMessages.count,
                     errorMessage: visibleError,
+                    maxExpandedHeight: max(240, composerContainerHeight * 0.78),
                     onSend: { text in Task { await store.send(text) } },
                     onStop: { Task { await store.cancel() } },
                     onDismissError: { dismissedError = store.lastError }
                 )
+            }
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                bottomOverlayHeight = height
             }
 
             if showNewSessionComposer {
                 newSessionComposerOverlay
                     .zIndex(1)
             }
+        }
+        .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.height
+        } action: { height in
+            composerContainerHeight = height
         }
         .animation(.easeInOut(duration: 0.18), value: isNearBottom)
         .animation(.easeInOut(duration: 0.18), value: isRefreshingCache)
@@ -178,7 +193,7 @@ struct SessionView: View {
                         store.switchTo(session)
                     } label: {
                         if session.id == store.sessionID {
-                            Label(sessionLabel(session, index: index), systemImage: "checkmark")
+                            Label(sessionLabel(session, index: index), systemImage: "circle.fill")
                         } else {
                             Text(sessionLabel(session, index: index))
                         }
@@ -429,12 +444,12 @@ struct SessionView: View {
                             .padding(.top, Self.itemSpacing)
                     }
 
-                    // Bottom spacer doubles as the scroll anchor: keeping the
-                    // composer clearance INSIDE the anchor means "anchor bottom"
-                    // == "content bottom", so scrollTo(...) lands at the true
-                    // tail instead of a spacer-height short of it.
+                    // Bottom spacer doubles as the scroll anchor. Match the
+                    // floating controls' measured height, plus a deliberate
+                    // content gap, so the final row clears either the refresh
+                    // pill or follow-up composer without visually crowding it.
                     Color.clear
-                        .frame(height: 120)
+                        .frame(height: bottomOverlayHeight + transcriptBottomGap)
                         .id(bottomAnchor)
                 }
                 .scrollTargetLayout()
@@ -453,16 +468,21 @@ struct SessionView: View {
                 // counts as "at bottom" (otherwise empty/short transcripts show
                 // a stray jump-to-bottom pill).
                 let scrollable = geometry.contentSize.height > geometry.containerSize.height
-                // Visible window in content coordinates spans
-                // [offset + insetTop, offset + insetTop + container].
-                let visibleBottom = geometry.contentOffset.y + geometry.contentInsets.top
-                    + geometry.containerSize.height
+                // Use SwiftUI's resolved visible content rect instead of
+                // reconstructing it from offsets and safe-area insets. The
+                // latter change during the navigation transition.
+                let visibleBottom = geometry.visibleRect.maxY
+                let distanceFromBottom = geometry.contentSize.height - visibleBottom
                 return ScrollState(
                     nearBottom: !scrollable || visibleBottom >= geometry.contentSize.height - nearBottomThreshold,
+                    // Near-bottom is deliberately generous for normal reader
+                    // behavior. Initial opening must be stricter: accepting an
+                    // 80pt-short position as settled permanently hides the
+                    // transcript tail behind the composer.
+                    atBottom: !scrollable || distanceFromBottom <= 1,
                     scrollable: scrollable,
                     contentHeight: geometry.contentSize.height,
-                    containerHeight: geometry.containerSize.height,
-                    insetTop: geometry.contentInsets.top
+                    containerHeight: geometry.containerSize.height
                 )
             } action: { old, state in
                 lastScrollState = state
@@ -475,7 +495,7 @@ struct SessionView: View {
                     isNearBottom = true
                     hasNewActivity = false
                     if state.scrollable {
-                        if state.nearBottom {
+                        if state.atBottom {
                             didInitialSettle = true
                         } else {
                             // Content became scrollable after the retry task
@@ -483,7 +503,7 @@ struct SessionView: View {
                             // it past the viewport): pin to the tail here so
                             // new messages still autoscroll, converging on
                             // nearBottom and settling on the next pass.
-                            scrollHandle.scrollTo(y: state.bottomOffset)
+                            scrollHandle.scrollTo(edge: .bottom)
                         }
                     }
                     return
@@ -501,7 +521,7 @@ struct SessionView: View {
                 if grewWhilePinned || shrankWhilePinned {
                     isNearBottom = true
                     hasNewActivity = false
-                    scrollHandle.scrollTo(y: state.bottomOffset)
+                    scrollHandle.scrollTo(edge: .bottom)
                     return
                 }
                 isNearBottom = state.nearBottom
@@ -509,7 +529,7 @@ struct SessionView: View {
                     hasNewActivity = false
                 }
             }
-            // Initial-settle retry loop: re-issue the exact bottom offset until
+            // Initial-settle retry loop: re-issue the bottom-edge target until
             // the geometry callback confirms we're there. A single fire-and-
             // forget scroll gets eaten by the push transition's container and
             // inset shuffling. Re-armed per session via `didInitialSettle`.
@@ -518,7 +538,7 @@ struct SessionView: View {
                 for _ in 0..<40 {
                     if didInitialSettle || Task.isCancelled { return }
                     if let s = lastScrollState, s.scrollable {
-                        scrollHandle.scrollTo(y: s.bottomOffset)
+                        scrollHandle.scrollTo(edge: .bottom)
                     }
                     try? await Task.sleep(for: .milliseconds(80))
                 }

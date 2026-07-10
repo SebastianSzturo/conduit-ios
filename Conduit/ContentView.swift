@@ -17,15 +17,23 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        let pathBinding = $path
+
+        return NavigationStack(path: pathBinding) {
             HomeView(
                 store: homeStore,
                 settings: settings,
                 onOpenWorkspace: { item in
                     openWorkspace(item)
                 },
-                onSubmitNewSession: { request in
-                    try await createWorkspace(for: request)
+                onSubmitNewSession: { [api, homeStore, pathBinding] request, completion in
+                    Self.submitWorkspace(
+                        for: request,
+                        api: api,
+                        homeStore: homeStore,
+                        path: pathBinding,
+                        completion: completion
+                    )
                 }
             )
             .navigationDestination(for: SessionRoute.self) { route in
@@ -47,6 +55,7 @@ struct ContentView: View {
     private func openWorkspace(_ item: HomeStore.WorkspaceItem) {
         guard let session = item.session else { return }
         homeStore.markSeen(item)
+        homeStore.selectSession(session, workspaceID: item.workspace.id)
         let store = SessionStore(
             api: api,
             workspaceID: item.workspace.id,
@@ -56,50 +65,92 @@ struct ContentView: View {
         path.append(SessionRoute(store: store))
     }
 
-    private func createWorkspace(for request: NewSessionRequest) async throws {
+    /// Unpacks the request synchronously before starting async work. Passing
+    /// `NewSessionRequest` itself through an async function-valued SwiftUI
+    /// callback triggers a bad guaranteed-argument lifetime on iOS 26.
+    private static func submitWorkspace(
+        for request: NewSessionRequest,
+        api: ConductorAPI,
+        homeStore: HomeStore,
+        path: Binding<[SessionRoute]>,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let project = request.project
+        let branch = request.branch
         let prompt = promptText(for: request)
-        // Name the session atomically with workspace creation. This avoids a
-        // window where home can only display the branch/workspace fallback.
         let sessionName = SessionStore.derivedTitle(from: request.prompt)
+        let model = request.model
+
+        Task { @MainActor in
+            do {
+                try await createWorkspace(
+                    project: project,
+                    branch: branch,
+                    prompt: prompt,
+                    sessionName: sessionName,
+                    model: model,
+                    api: api,
+                    homeStore: homeStore,
+                    path: path
+                )
+                completion(.success(()))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private static func createWorkspace(
+        project: Project,
+        branch: String?,
+        prompt: String,
+        sessionName: String?,
+        model: ModelOption,
+        api: ConductorAPI,
+        homeStore: HomeStore,
+        path: Binding<[SessionRoute]>
+    ) async throws {
         let created = try await api.createWorkspace(
-            projectID: request.project.id,
+            projectID: project.id,
             name: nil,
             sessionName: sessionName,
-            branch: request.branch,
-            agent: request.model.agent,
-            model: request.model.modelID
+            branch: branch,
+            agent: model.agent,
+            model: model.modelID
         )
         let store = SessionStore(
             api: api,
             created: created,
-            project: request.project,
+            project: project,
             initialPrompt: prompt,
             sessionName: sessionName,
-            model: request.model,
-            onSessionUpdate: handleSessionUpdate
+            model: model,
+            onSessionUpdate: { workspaceID, session in
+                homeStore.selectSession(session, workspaceID: workspaceID)
+            }
         )
-        path.append(SessionRoute(store: store))
+        path.wrappedValue.append(SessionRoute(store: store))
         await homeStore.refresh()
         if let sessionName {
             // The session-list endpoint can lag workspace creation. Seed the
             // row from the creation response so it never flashes the branch.
-            handleSessionUpdate(
-                workspaceID: created.workspaceId,
-                session: Session(
+            homeStore.selectSession(
+                Session(
                     id: created.sessionId,
                     deepLink: created.deepLink,
                     name: sessionName,
-                    model: request.model.modelID
-                )
+                    model: model.modelID
+                ),
+                workspaceID: created.workspaceId
             )
         }
     }
 
     private func handleSessionUpdate(workspaceID: String, session: Session) {
-        homeStore.updateSession(session, workspaceID: workspaceID)
+        homeStore.selectSession(session, workspaceID: workspaceID)
     }
 
-    private func promptText(for request: NewSessionRequest) -> String {
+    private static func promptText(for request: NewSessionRequest) -> String {
         switch request.mode {
         case .plan: "Plan only — do not write code yet.\n\n\(request.prompt)"
         case .draft: "Draft: \(request.prompt)"
