@@ -53,6 +53,9 @@ To generate from a different source URL:
 ./api/update-api-docs.mjs --source https://api.conductor.build/v0/openapi.json
 ```
 
+CI runs `node api/check-api-drift.mjs` on pull requests and daily so changes to
+the live API cannot leave the checked-in client reference silently stale.
+
 ## Architecture
 
 ```
@@ -66,7 +69,7 @@ Conduit/
 
 A few implementation notes:
 
-- **Polling, not sockets.** The Conductor v0 API has no push channel; `SessionStore` polls messages on a 2 s cadence while the agent is working and 6 s while idle, resuming from a message offset so transcripts are append-only.
+- **Polling, not sockets.** The Conductor v0 API currently has no push channel; `SessionStore` polls messages on a 2 s cadence while the agent is working and 6 s while idle, resuming from a message cursor so transcripts are append-only.
 - **Two agent event families.** Message payloads arrive as either Claude stream-JSON events or Codex thread events; `TranscriptBuilder` normalizes both into one transcript model.
 - **Activity you can trust.** Server `status.updatedAt` timestamps reflect row writes (bulk infra updates stamp cohorts identically), so recency ranking uses an `ActivityLedger` fed only by trustworthy signals: newest cached message time and observed working status.
 - **Bounded transcript window.** Long sessions render the newest 150 rows in a plain `VStack` (lazy stacks break bottom-anchoring on large one-shot cache hydrations) with a "Show earlier messages" expander.

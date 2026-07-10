@@ -44,7 +44,7 @@ struct WorkspaceRow: View {
             Button {
                 onRename()
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label("Rename session", systemImage: "pencil")
             }
             Button(role: .destructive) {
                 onArchive()

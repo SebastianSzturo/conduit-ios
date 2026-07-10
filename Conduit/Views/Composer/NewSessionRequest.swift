@@ -23,7 +23,4 @@ nonisolated struct NewSessionRequest: Hashable {
     let prompt: String
     let model: ModelOption
     let mode: ComposerMode
-    /// Selected reasoning effort. Local/persisted only — the v0 API does not
-    /// accept a thinking level yet, so integrators must NOT send this to the API.
-    let thinkingLevel: ThinkingLevel
 }

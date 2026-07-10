@@ -1,10 +1,13 @@
 import SwiftUI
+import UIKit
 
 // MARK: - User prompt bubble
 
 struct UserPromptBubble: View {
     let text: String
     let queued: Bool
+    var failed = false
+    var onRetry: (() -> Void)?
 
     private static let collapseThreshold = 280
     @State private var expanded = false
@@ -24,6 +27,16 @@ struct UserPromptBubble: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(Theme.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = text
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                    }
+                    .accessibilityAction(named: "Copy") {
+                        UIPasteboard.general.string = text
+                    }
 
                 if isLong {
                     Button(expanded ? "Show less" : "Show more") {
@@ -39,6 +52,19 @@ struct UserPromptBubble: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textSecondary)
                         .padding(.trailing, 4)
+                }
+                if failed {
+                    HStack(spacing: 8) {
+                        Label("Failed to send", systemImage: "exclamationmark.circle.fill")
+                            .foregroundStyle(Theme.error)
+                        if let onRetry {
+                            Button("Retry", action: onRetry)
+                                .fontWeight(.semibold)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .padding(.trailing, 4)
                 }
             }
             .frame(maxWidth: 300, alignment: .trailing)
@@ -716,6 +742,9 @@ struct WorkingShimmerRow: View {
 /// status is `.error` — separate from the dismissible composer banner.
 struct ErrorMarkerRow: View {
     let message: String
+    /// When the error occurred, if the server reported it. Shows a subtle
+    /// relative-time hint ("5m") so a lingering error reads as timestamped.
+    var timestamp: Date? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -727,6 +756,11 @@ struct ErrorMarkerRow: View {
                 .foregroundStyle(Theme.error)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let timestamp {
+                Text(relativeTimeLabel(timestamp))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+            }
         }
         .accessibilityElement(children: .combine)
     }

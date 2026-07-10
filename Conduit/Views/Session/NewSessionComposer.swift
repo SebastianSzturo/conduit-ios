@@ -1,21 +1,37 @@
 import SwiftUI
 
-/// Expanded composer card (frames 008/013): repo chip + cloud, multiline text
-/// field, and a bottom action row (model chip and send).
-struct ExpandedComposer: View {
-    let store: HomeStore
-    @Bindable var composer: ComposerState
-    /// Completes only after workspace creation succeeds. A failure leaves the
-    /// draft and composer open so the user can retry without retyping.
-    var onSubmit: (NewSessionRequest) async throws -> Void
-    /// Dismisses the expanded composer without sending.
+/// Expanded composer card for spawning a sibling session in the current
+/// workspace: multiline starting-message field and a bottom action row (model
+/// chip + send). Mirrors the home screen's `ExpandedComposer`, minus the repo
+/// picker — the workspace is fixed.
+struct NewSessionComposer: View {
+    /// Preselected model (the current session's model).
+    let initialModel: ModelOption
+    let models: [ModelOption]
+    /// Called with the trimmed starting message and chosen model on send.
+    var onSubmit: (String, ModelOption) async throws -> Void
+    /// Dismisses the composer without sending.
     var onDismiss: () -> Void
 
-    @FocusState private var promptFocused: Bool
-    @State private var showRepoPicker = false
+    @State private var prompt = ""
+    @State private var selectedModel: ModelOption
     @State private var showModelPicker = false
     @State private var isSubmitting = false
     @State private var submitError: String?
+    @FocusState private var promptFocused: Bool
+
+    init(
+        initialModel: ModelOption,
+        models: [ModelOption],
+        onSubmit: @escaping (String, ModelOption) async throws -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.initialModel = initialModel
+        self.models = models
+        self.onSubmit = onSubmit
+        self.onDismiss = onDismiss
+        self._selectedModel = State(initialValue: initialModel)
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -35,15 +51,9 @@ struct ExpandedComposer: View {
             RoundedRectangle(cornerRadius: Theme.cornerLarge, style: .continuous)
                 .stroke(Theme.separator, lineWidth: 1)
         )
-        .onAppear {
-            composer.syncDefaultProjectIfNeeded()
-            promptFocused = true
-        }
-        .sheet(isPresented: $showRepoPicker) {
-            RepoPickerSheet(store: store, composer: composer)
-        }
+        .onAppear { promptFocused = true }
         .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet(selectedModel: composer.selectedModel, models: composer.availableModels) { composer.selectModel($0) }
+            ModelPickerSheet(selectedModel: selectedModel, models: models) { selectedModel = $0 }
         }
     }
 
@@ -51,24 +61,10 @@ struct ExpandedComposer: View {
 
     private var topRow: some View {
         HStack(spacing: 8) {
-            Button {
-                showRepoPicker = true
-            } label: {
-                HStack(spacing: 6) {
-                    Text(repoLabel)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                    Text(composer.branch)
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-            }
-            .buttonStyle(.plain)
+            Text("New session")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
 
             Spacer(minLength: 8)
 
@@ -78,26 +74,17 @@ struct ExpandedComposer: View {
         }
     }
 
-    private var repoLabel: String {
-        guard let project = composer.selectedProject else { return "Select repo" }
-        let slug = project.repoSlug
-        if let slash = slug.lastIndex(of: "/") {
-            return String(slug[slug.index(after: slash)...])
-        }
-        return project.name
-    }
-
     // MARK: Prompt field
 
     private var promptField: some View {
         ZStack(alignment: .topLeading) {
-            if composer.prompt.isEmpty {
+            if prompt.isEmpty {
                 Text("Plan, ask, build…")
                     .font(.system(size: 17))
                     .foregroundStyle(Theme.textSecondary)
                     .padding(.top, 2)
             }
-            TextField("", text: $composer.prompt, axis: .vertical)
+            TextField("", text: $prompt, axis: .vertical)
                 .font(.system(size: 17))
                 .foregroundStyle(Theme.textPrimary)
                 .focused($promptFocused)
@@ -109,13 +96,17 @@ struct ExpandedComposer: View {
 
     // MARK: Bottom row
 
+    private var canSend: Bool {
+        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var bottomRow: some View {
         HStack(spacing: 14) {
-            ModelChip(name: composer.selectedModel.displayName) { showModelPicker = true }
+            ModelChip(name: selectedModel.displayName) { showModelPicker = true }
 
             Spacer(minLength: 8)
 
-            if composer.canSend || isSubmitting {
+            if canSend || isSubmitting {
                 Button(action: submit) {
                     Group {
                         if isSubmitting {
@@ -134,18 +125,18 @@ struct ExpandedComposer: View {
                 .transition(.scale.combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: composer.canSend)
+        .animation(.easeInOut(duration: 0.15), value: canSend)
     }
 
     private func submit() {
-        guard let request = composer.makeRequest() else { return }
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         isSubmitting = true
         submitError = nil
         Task {
             defer { isSubmitting = false }
             do {
-                try await onSubmit(request)
-                composer.reset()
+                try await onSubmit(trimmed, selectedModel)
                 promptFocused = false
                 onDismiss()
             } catch {
@@ -156,27 +147,26 @@ struct ExpandedComposer: View {
     }
 }
 
-private func expandedComposerPreview() -> some View {
-    let store = HomeStore(api: MockConductorAPI())
-    let settings = AppSettings()
-    let composer = ComposerState(store: store, settings: settings)
-    composer.selectedProject = MockConductorAPI.sampleProjects[0]
-    return ZStack {
+#Preview("Dark") {
+    ZStack {
         Theme.background.ignoresSafeArea()
         VStack {
             Spacer()
-            ExpandedComposer(store: store, composer: composer, onSubmit: { _ in }, onDismiss: {})
+            NewSessionComposer(initialModel: .default, models: ModelOption.fallback, onSubmit: { _, _ in }, onDismiss: {})
                 .padding(16)
         }
     }
-}
-
-#Preview("Dark") {
-    expandedComposerPreview()
-        .preferredColorScheme(.dark)
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Light") {
-    expandedComposerPreview()
-        .preferredColorScheme(.light)
+    ZStack {
+        Theme.background.ignoresSafeArea()
+        VStack {
+            Spacer()
+            NewSessionComposer(initialModel: .default, models: ModelOption.fallback, onSubmit: { _, _ in }, onDismiss: {})
+                .padding(16)
+        }
+    }
+    .preferredColorScheme(.light)
 }

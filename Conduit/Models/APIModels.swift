@@ -30,8 +30,13 @@ nonisolated struct Workspace: Codable, Identifiable, Hashable, Sendable {
     let createdAt: String
     let deepLink: String
     let creatorId: String?
+    /// Raw Postgres timestamp of the most recent message across the workspace's
+    /// sessions. Optional: absent from older cached snapshots and for
+    /// workspaces with no messages yet.
+    let lastActivityAt: String?
 
     var createdAtDate: Date? { PostgresTimestamp.parse(createdAt) }
+    var lastActivityAtDate: Date? { lastActivityAt.flatMap(PostgresTimestamp.parse) }
 }
 
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
@@ -39,6 +44,15 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     let deepLink: String
     let name: String?
     let model: String?
+    let resolvedModel: String?
+
+    init(id: String, deepLink: String, name: String?, model: String?, resolvedModel: String? = nil) {
+        self.id = id
+        self.deepLink = deepLink
+        self.name = name
+        self.model = model
+        self.resolvedModel = resolvedModel
+    }
 }
 
 // MARK: - Statuses
@@ -83,9 +97,23 @@ nonisolated struct SessionStatus: Codable, Hashable, Sendable {
     let sessionId: String
     let status: String
     let updatedAt: String
+    /// Transient, current-turn error detail. Often nil even while the session is
+    /// in the `error` state, so callers should fall back to `lastError`.
     let errorMessage: String?
+    /// The last error the session recorded, persisted by the server across polls
+    /// even after the transient `errorMessage` clears — the durable explanation
+    /// for an `error` state.
+    let lastError: String?
+    /// Raw Postgres timestamp of `lastError`, e.g. "2026-07-06 07:33:24.77353+00".
+    let lastErrorAt: String?
 
     var kind: SessionStatusKind { SessionStatusKind(rawValue: status) ?? .unknown }
+    var lastErrorAtDate: Date? { lastErrorAt.flatMap(PostgresTimestamp.parse) }
+
+    /// Best human-facing explanation for an `error` state: the transient
+    /// `errorMessage` if the server sent one this turn, else the persisted
+    /// `lastError`. Nil when the server offered neither.
+    var resolvedErrorMessage: String? { errorMessage ?? lastError }
 }
 
 // MARK: - Requests / responses
@@ -136,39 +164,38 @@ nonisolated struct StructuredError: Codable, Sendable, Error {
     let retryable: Bool?
 }
 
+nonisolated struct APIDiagnostics: Hashable, Sendable {
+    let requestID: String?
+    let retryAfter: Date?
+}
+
+nonisolated struct Identity: Codable, Hashable, Sendable {
+    let userId: String
+    let email: String?
+    let organizationId: String?
+    let authMethod: String
+}
+
+nonisolated struct ModelCapabilitiesResponse: Codable, Sendable {
+    let data: [ModelCapability]
+}
+
+nonisolated struct ModelCapability: Codable, Sendable {
+    let id: String
+    let displayName: String
+    let agent: AgentKind
+    let effortTag: String?
+    let isDefault: Bool?
+
+    var option: ModelOption {
+        ModelOption(displayName: displayName, effortTag: effortTag, agent: agent, modelID: id)
+    }
+}
+
 // MARK: - Agents & models
 
 nonisolated enum AgentKind: String, Codable, CaseIterable, Sendable {
     case claude, codex, cursor, acp
-}
-
-/// Reasoning-effort setting, selectable separately from the model (mirrors
-/// Conductor desktop's composer). NOTE: the v0 API does not yet accept a
-/// thinking level on session/message creation — this is stored locally and
-/// shown in the UI, ready to be wired once the API exposes it.
-nonisolated enum ThinkingLevel: String, CaseIterable, Codable, Sendable {
-    case low, medium, high, xhigh
-
-    var displayName: String {
-        switch self {
-        case .low: "Low"
-        case .medium: "Medium"
-        case .high: "High"
-        case .xhigh: "Extra High"
-        }
-    }
-
-    /// Bars shown in the desktop-style chip (1–4).
-    var barCount: Int {
-        switch self {
-        case .low: 1
-        case .medium: 2
-        case .high: 3
-        case .xhigh: 4
-        }
-    }
-
-    static let `default` = ThinkingLevel.medium
 }
 
 /// Curated model options for the picker; `modelID` is sent as `model` on create.
@@ -180,22 +207,21 @@ nonisolated struct ModelOption: Identifiable, Hashable, Sendable {
 
     var id: String { modelID }
 
-    static let all: [ModelOption] = [
+    /// Bootstrap catalog retained until the server capability route succeeds.
+    static let fallback: [ModelOption] = [
         ModelOption(displayName: "Fable 5", effortTag: "High", agent: .claude, modelID: "fable-5"),
-        ModelOption(displayName: "Opus 4.8", effortTag: "High", agent: .claude, modelID: "opus-4-8"),
         ModelOption(displayName: "Opus 4.8 (1M)", effortTag: "High", agent: .claude, modelID: "opus-4-8-1m"),
-        ModelOption(displayName: "Sonnet 5", effortTag: "Medium", agent: .claude, modelID: "sonnet-5"),
-        ModelOption(displayName: "Haiku 4.5", effortTag: "Fast", agent: .claude, modelID: "haiku-4-5"),
-        ModelOption(displayName: "GPT-5.5", effortTag: "Medium", agent: .codex, modelID: "gpt-5.5"),
-        ModelOption(displayName: "Codex 5.3", effortTag: "Medium", agent: .codex, modelID: "codex-5.3"),
-        ModelOption(displayName: "Composer 2.5", effortTag: "Fast", agent: .cursor, modelID: "composer-2.5"),
+        ModelOption(displayName: "GPT-5.6 Sol", effortTag: "Medium", agent: .codex, modelID: "gpt-5.6-sol"),
+        ModelOption(displayName: "GPT-5.6 Terra", effortTag: "Medium", agent: .codex, modelID: "gpt-5.6-terra"),
+        ModelOption(displayName: "Cursor Auto", effortTag: nil, agent: .cursor, modelID: "auto"),
+        ModelOption(displayName: "Grok 4.5", effortTag: nil, agent: .cursor, modelID: "grok-4.5"),
     ]
 
-    /// GPT-5.5 is the app default.
-    static let `default` = all.first { $0.modelID == "gpt-5.5" } ?? all[0]
+    /// GPT-5.6 Sol is the app default.
+    static let `default` = fallback.first { $0.modelID == "gpt-5.6-sol" } ?? fallback[0]
 
     static func named(_ modelID: String?) -> ModelOption? {
-        all.first { $0.modelID == modelID }
+        fallback.first { $0.modelID == modelID }
     }
 
     /// Display name for an arbitrary API model string (e.g. "opus-4-8-1m" from a session).

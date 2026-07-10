@@ -444,7 +444,7 @@
         "tags": [
           "Workspaces"
         ],
-        "description": "Creates a cloud workspace and first session, and returns a deep link that opens the workspace in the Conductor desktop app. Pass either projectId or repositoryUrl. Accepted model ids by agent — claude: fable-5, opus-4-8-1m, opus-4-8, opus-4-7-1m, opus-4-7, opus-1m, opus, opus-4-6-1m, sonnet-5-1m, sonnet-4-6-1m, sonnet, haiku; codex: gpt-5.5, gpt-5.4, gpt-5.6-sol, gpt-5.6-terra, gpt-5.3-codex-spark, gpt-5.3-codex, gpt-5.2-codex; cursor: composer-2.5.",
+        "description": "Creates a cloud workspace and first session, and returns a deep link that opens the workspace in the Conductor desktop app. Pass either projectId or repositoryUrl. Accepted model ids by agent — claude: fable-5, opus-4-8-1m, opus-4-8, opus-4-7-1m, opus-4-7, opus-1m, opus, opus-4-6-1m, sonnet-5-1m, sonnet-4-6-1m, sonnet, haiku; codex: gpt-5.5, gpt-5.4, gpt-5.6-sol, gpt-5.6-terra, gpt-5.3-codex-spark, gpt-5.3-codex, gpt-5.2-codex; cursor: auto, composer-2.5, grok-4.5.",
         "requestBody": {
           "required": true,
           "content": {
@@ -618,7 +618,19 @@
                           {
                             "type": "string",
                             "enum": [
+                              "auto"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
                               "composer-2.5"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "grok-4.5"
                             ]
                           }
                         ]
@@ -806,7 +818,19 @@
                           {
                             "type": "string",
                             "enum": [
+                              "auto"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
                               "composer-2.5"
+                            ]
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "grok-4.5"
                             ]
                           }
                         ]
@@ -1309,7 +1333,7 @@
         "tags": [
           "Workspaces"
         ],
-        "description": "Creates a session in an existing workspace. Accepted model ids by agent — claude: fable-5, opus-4-8-1m, opus-4-8, opus-4-7-1m, opus-4-7, opus-1m, opus, opus-4-6-1m, sonnet-5-1m, sonnet-4-6-1m, sonnet, haiku; codex: gpt-5.5, gpt-5.4, gpt-5.6-sol, gpt-5.6-terra, gpt-5.3-codex-spark, gpt-5.3-codex, gpt-5.2-codex; cursor: composer-2.5.",
+        "description": "Creates a session in an existing workspace. Accepted model ids by agent — claude: fable-5, opus-4-8-1m, opus-4-8, opus-4-7-1m, opus-4-7, opus-1m, opus, opus-4-6-1m, sonnet-5-1m, sonnet-4-6-1m, sonnet, haiku; codex: gpt-5.5, gpt-5.4, gpt-5.6-sol, gpt-5.6-terra, gpt-5.3-codex-spark, gpt-5.3-codex, gpt-5.2-codex; cursor: auto, composer-2.5, grok-4.5.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1473,7 +1497,19 @@
                       {
                         "type": "string",
                         "enum": [
+                          "auto"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
                           "composer-2.5"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "grok-4.5"
                         ]
                       }
                     ]

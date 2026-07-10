@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Session detail screen: live agent transcript, follow-up composer with
 /// stop/cancel, queued-message handling, and the new-workspace setup hero.
@@ -14,12 +15,18 @@ import SwiftUI
 struct SessionView: View {
     let store: SessionStore
     let settings: AppSettings
+    /// Called with a store for a freshly created sibling session so the
+    /// integrator can push it onto the navigation stack.
+    var onNewSession: (SessionStore) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
 
     // Rename alert
     @State private var showRename = false
     @State private var renameText = ""
+
+    // New-session composer overlay (model + starting message).
+    @State private var showNewSessionComposer = false
 
     // Error banner dismissal (local; re-shows if the store reports a new error).
     @State private var dismissedError: String?
@@ -70,6 +77,13 @@ struct SessionView: View {
         return err
     }
 
+    /// True while the network catch-up is running behind a cache-hydrated
+    /// transcript. Fresh sessions with no cached items show the centered
+    /// spinner in the transcript instead.
+    private var isRefreshingCache: Bool {
+        store.isLoadingInitial && !store.items.isEmpty
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             Theme.background.ignoresSafeArea()
@@ -82,11 +96,14 @@ struct SessionView: View {
                 }
             }
 
-            VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 Spacer(minLength: 0)
                 if !isNearBottom && store.workspaceSetup == nil {
                     scrollToBottomPill
-                        .padding(.bottom, 6)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
+                if isRefreshingCache && store.workspaceSetup == nil {
+                    refreshingPill
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
                 SessionComposer(
@@ -94,14 +111,19 @@ struct SessionView: View {
                     isWorking: store.isWorking,
                     queuedCount: store.queuedMessages.count,
                     errorMessage: visibleError,
-                    settings: settings,
                     onSend: { text in Task { await store.send(text) } },
                     onStop: { Task { await store.cancel() } },
                     onDismissError: { dismissedError = store.lastError }
                 )
             }
+
+            if showNewSessionComposer {
+                newSessionComposerOverlay
+                    .zIndex(1)
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: isNearBottom)
+        .animation(.easeInOut(duration: 0.18), value: isRefreshingCache)
         .toolbar { toolbarContent }
         .task { await store.start() }
         .onDisappear { store.stop() }
@@ -114,6 +136,35 @@ struct SessionView: View {
                 Task { await store.rename(to: name) }
             }
         }
+    }
+
+    // MARK: - New-session composer overlay
+
+    /// Dimmed backdrop + composer card for spawning a sibling session, mirroring
+    /// the home screen's expanded-composer presentation.
+    private var newSessionComposerOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.primary.opacity(0.35)
+                .ignoresSafeArea()
+                .onTapGesture { collapseNewSessionComposer() }
+
+            NewSessionComposer(
+                initialModel: settings.model(named: store.modelID) ?? .default,
+                models: settings.availableModels,
+                onSubmit: { prompt, model in
+                    let created = try await store.createNewSession(model: model, initialMessage: prompt)
+                    onNewSession(created)
+                },
+                onDismiss: collapseNewSessionComposer
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func collapseNewSessionComposer() {
+        withAnimation(.easeInOut(duration: 0.2)) { showNewSessionComposer = false }
     }
 
     // MARK: - Toolbar
@@ -134,16 +185,24 @@ struct SessionView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 5) {
-                    Text(store.title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .truncationMode(.middle)
-                        .lineLimit(1)
-                    if store.availableSessions.count > 1 {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
+                VStack(spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text(store.title)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .truncationMode(.middle)
+                            .lineLimit(1)
+                        if store.availableSessions.count > 1 {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    if let modelName = store.modelName {
+                        Text(modelName)
+                            .font(.system(size: 12))
                             .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
                     }
                 }
                 .frame(maxWidth: 220)
@@ -152,11 +211,34 @@ struct SessionView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                // Not offered while the workspace is still provisioning — a
+                // sibling session can only be created once it exists.
+                if store.workspaceSetup == nil {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.25)) { showNewSessionComposer = true }
+                    } label: {
+                        Label("New session", systemImage: "plus.bubble")
+                    }
+                }
                 Button {
                     renameText = store.title
                     showRename = true
                 } label: {
                     Label("Rename", systemImage: "pencil")
+                }
+                if let link = store.deepLink {
+                    Button {
+                        copyToPasteboard(link)
+                    } label: {
+                        Label("Copy session link", systemImage: "link")
+                    }
+                }
+                if let sessionID = store.sessionID {
+                    Button {
+                        copyToPasteboard(sessionID)
+                    } label: {
+                        Label("Copy session ID", systemImage: "number")
+                    }
                 }
                 if store.isWorking {
                     Button(role: .destructive) {
@@ -169,6 +251,11 @@ struct SessionView: View {
                 Image(systemName: "ellipsis")
             }
         }
+    }
+
+    /// Copies session debugging information to the system clipboard.
+    private func copyToPasteboard(_ value: String) {
+        UIPasteboard.general.string = value
     }
 
     /// Display name for a session in the switcher menu.
@@ -338,7 +425,7 @@ struct SessionView: View {
                     }
 
                     if let inlineError {
-                        ErrorMarkerRow(message: inlineError)
+                        ErrorMarkerRow(message: inlineError, timestamp: store.lastErrorAt)
                             .padding(.top, Self.itemSpacing)
                     }
 
@@ -513,6 +600,26 @@ struct SessionView: View {
         .accessibilityLabel(hasNewActivity ? "Scroll to bottom, new activity" : "Scroll to bottom")
     }
 
+    /// Floating pill shown while cached transcript content is on screen and the
+    /// network catch-up is still running, so long sessions signal when they're
+    /// fully loaded.
+    private var refreshingPill: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.textSecondary)
+            Text("Updating…")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Theme.separator, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Updating messages")
+    }
+
     // MARK: - Group dispatch
 
     @ViewBuilder
@@ -531,7 +638,12 @@ struct SessionView: View {
     private func singleView(_ item: TranscriptItem) -> some View {
         switch item.kind {
         case .userPrompt(let text, _, let queued):
-            UserPromptBubble(text: text, queued: queued)
+            UserPromptBubble(
+                text: text,
+                queued: queued,
+                failed: store.failedMessageIDs.contains(item.id),
+                onRetry: { Task { await store.retryMessage(id: item.id) } }
+            )
         case .assistantText(let text):
             AssistantTextRow(text: text)
         case .thinking(let text, let seconds):
