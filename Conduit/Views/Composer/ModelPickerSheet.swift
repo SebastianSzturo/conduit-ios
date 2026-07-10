@@ -1,10 +1,11 @@
 import SwiftUI
 
 /// Sheet for choosing the model. Active section (current, checkmark) + More
-/// section listing ModelOption.all.
+/// section listing the server-provided catalog.
 struct ModelPickerSheet: View {
     /// The currently-active model (checkmarked in the Active section).
     let selectedModel: ModelOption
+    let models: [ModelOption]
     /// Called with the chosen model; the sheet dismisses itself after.
     var onSelect: (ModelOption) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -13,8 +14,8 @@ struct ModelPickerSheet: View {
 
     private var filtered: [ModelOption] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return ModelOption.all }
-        return ModelOption.all.filter {
+        guard !q.isEmpty else { return models }
+        return models.filter {
             $0.displayName.lowercased().contains(q) || ($0.effortTag?.lowercased().contains(q) ?? false)
         }
     }
@@ -143,5 +144,5 @@ private struct ModelRow: View {
 }
 
 #Preview {
-    ModelPickerSheet(selectedModel: .default) { _ in }
+    ModelPickerSheet(selectedModel: .default, models: ModelOption.fallback) { _ in }
 }

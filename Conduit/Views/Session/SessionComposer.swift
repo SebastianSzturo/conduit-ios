@@ -2,18 +2,15 @@ import SwiftUI
 import UIKit
 
 /// Floating bottom composer: input pill, send/stop buttons, and (when focused)
-/// a bottom row with the shared "+"/model/thinking chips. Matches frames 054 / 062.
+/// a read-only model label. Matches frames 054 / 062.
 ///
 /// NOTE: a session's model is fixed server-side at creation and POST /messages
-/// takes only text — so the model/thinking chips here are display/local-only.
-/// Selection updates local state plus the persisted app defaults.
+/// takes only text, so the model is displayed but cannot be changed here.
 struct SessionComposer: View {
     let modelName: String?
     let isWorking: Bool
     let queuedCount: Int
     let errorMessage: String?
-    /// Persists model/thinking selections as app defaults.
-    let settings: AppSettings
     /// Called with the trimmed text when the user taps send.
     var onSend: (String) -> Void
     /// Called when the user taps the stop button.
@@ -22,12 +19,6 @@ struct SessionComposer: View {
     var onDismissError: () -> Void
 
     @State private var text = ""
-    @State private var showContextSheet = false
-    @State private var showModelPicker = false
-    /// Local-only model selection, seeded from the session's model.
-    @State private var selectedModel: ModelOption?
-    /// Local-only thinking level, seeded from the app default.
-    @State private var thinkingLevel: ThinkingLevel = .default
     @FocusState private var focused: Bool
 
     private var trimmed: String {
@@ -37,14 +28,7 @@ struct SessionComposer: View {
 
     /// Chip label: local selection, else the session's model, else the default.
     private var modelChipName: String {
-        selectedModel?.displayName ?? modelName ?? ModelOption.default.displayName
-    }
-
-    /// Model used to checkmark the picker's Active section.
-    private var pickerModel: ModelOption {
-        selectedModel
-            ?? ModelOption.all.first { $0.displayName == modelName }
-            ?? .default
+        modelName ?? ModelOption.default.displayName
     }
 
     var body: some View {
@@ -68,18 +52,6 @@ struct SessionComposer: View {
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .onAppear { thinkingLevel = settings.defaultThinkingLevel }
-        .sheet(isPresented: $showContextSheet) {
-            // Mode (Plan/Draft) only makes sense pre-session — hidden here.
-            ContextSheet(mode: nil)
-        }
-        .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet(selectedModel: pickerModel) { model in
-                // Display/local-only: the session's model can't change server-side.
-                selectedModel = model
-                settings.defaultModelID = model.modelID
-            }
-        }
     }
 
     // MARK: Pill
@@ -120,12 +92,7 @@ struct SessionComposer: View {
 
             if focused {
                 HStack(spacing: 14) {
-                    PlusCircleButton(size: 30) { showContextSheet = true }
-                    ModelChip(name: modelChipName) { showModelPicker = true }
-                    ThinkingChip(level: thinkingLevel) { level in
-                        thinkingLevel = level
-                        settings.defaultThinkingLevel = level
-                    }
+                    ModelChip(name: modelChipName)
                     Spacer()
                 }
             }
@@ -186,9 +153,9 @@ struct SessionComposer: View {
 #Preview("Composer states") {
     VStack(spacing: 24) {
         Spacer()
-        SessionComposer(modelName: "Fable 5", isWorking: false, queuedCount: 0, errorMessage: nil, settings: AppSettings(), onSend: { _ in }, onStop: {}, onDismissError: {})
-        SessionComposer(modelName: "Fable 5", isWorking: true, queuedCount: 2, errorMessage: nil, settings: AppSettings(), onSend: { _ in }, onStop: {}, onDismissError: {})
-        SessionComposer(modelName: "Opus 4.8", isWorking: false, queuedCount: 0, errorMessage: "Request failed (500)", settings: AppSettings(), onSend: { _ in }, onStop: {}, onDismissError: {})
+        SessionComposer(modelName: "Fable 5", isWorking: false, queuedCount: 0, errorMessage: nil, onSend: { _ in }, onStop: {}, onDismissError: {})
+        SessionComposer(modelName: "Fable 5", isWorking: true, queuedCount: 2, errorMessage: nil, onSend: { _ in }, onStop: {}, onDismissError: {})
+        SessionComposer(modelName: "Opus 4.8", isWorking: false, queuedCount: 0, errorMessage: "Request failed (500)", onSend: { _ in }, onStop: {}, onDismissError: {})
     }
     .background(Theme.background)
     .preferredColorScheme(.dark)

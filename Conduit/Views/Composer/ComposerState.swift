@@ -10,7 +10,6 @@ final class ComposerState {
     var selectedProject: Project?
     var branch: String = "main"
     var selectedModel: ModelOption = .default
-    var thinkingLevel: ThinkingLevel = .default
     var mode: ComposerMode = .agent
 
     private let store: HomeStore
@@ -19,10 +18,11 @@ final class ComposerState {
     init(store: HomeStore, settings: AppSettings) {
         self.store = store
         self.settings = settings
-        self.selectedModel = ModelOption.named(settings.defaultModelID) ?? .default
-        self.thinkingLevel = settings.defaultThinkingLevel
+        self.selectedModel = settings.model(named: settings.defaultModelID) ?? .default
         self.selectedProject = Self.defaultProject(store: store)
     }
+
+    var availableModels: [ModelOption] { settings.availableModels }
 
     /// Picks the most recently used project, falling back to the first project.
     static func defaultProject(store: HomeStore) -> Project? {
@@ -51,11 +51,6 @@ final class ComposerState {
         settings.defaultModelID = model.modelID
     }
 
-    func selectThinkingLevel(_ level: ThinkingLevel) {
-        thinkingLevel = level
-        settings.defaultThinkingLevel = level
-    }
-
     var canSend: Bool {
         selectedProject != nil && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -71,8 +66,7 @@ final class ComposerState {
             branch: cleanedBranch.isEmpty ? nil : cleanedBranch,
             prompt: trimmed,
             model: selectedModel,
-            mode: mode,
-            thinkingLevel: thinkingLevel
+            mode: mode
         )
     }
 

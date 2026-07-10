@@ -14,7 +14,7 @@ struct HomeView: View {
     let store: HomeStore
     let settings: AppSettings
     var onOpenWorkspace: (HomeStore.WorkspaceItem) -> Void
-    var onSubmitNewSession: (NewSessionRequest) -> Void
+    var onSubmitNewSession: (NewSessionRequest) async throws -> Void
 
     @State private var composer: ComposerState
     @State private var showSearch = false
@@ -34,7 +34,7 @@ struct HomeView: View {
         store: HomeStore,
         settings: AppSettings,
         onOpenWorkspace: @escaping (HomeStore.WorkspaceItem) -> Void,
-        onSubmitNewSession: @escaping (NewSessionRequest) -> Void
+        onSubmitNewSession: @escaping (NewSessionRequest) async throws -> Void
     ) {
         self.store = store
         self.settings = settings
@@ -85,12 +85,16 @@ struct HomeView: View {
             }
         }
         .task {
+            await settings.refreshModelCapabilities(using: store.api)
             await store.refresh()
             store.startPolling()
         }
         .onDisappear { store.stopPolling() }
         .sheet(isPresented: $showSettings) {
-            SettingsSheet(settings: settings)
+            SettingsSheet(settings: settings, api: store.api) {
+                await settings.refreshModelCapabilities(using: store.api)
+                await store.refresh()
+            }
         }
         .sheet(isPresented: $showSearch) {
             SearchSheet(store: store) { item in
@@ -103,14 +107,14 @@ struct HomeView: View {
                 composerOverlay
             }
         }
-        .alert("Rename", isPresented: renameBinding) {
+        .alert("Rename Session", isPresented: renameBinding) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Save") {
                 if let target = renameTarget {
                     let name = renameText.trimmingCharacters(in: .whitespaces)
                     if !name.isEmpty {
-                        Task { await store.renameWorkspace(target, to: name) }
+                        Task { await store.renameSession(target, to: name) }
                     }
                 }
                 renameTarget = nil
@@ -142,7 +146,7 @@ struct HomeView: View {
                     .tint(Theme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                emptyState
+                refreshableEmptyState
             }
         } else {
             list
@@ -152,6 +156,10 @@ struct HomeView: View {
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let error = store.lastError {
+                    staleBanner(error)
+                        .padding(.top, 8)
+                }
                 if filter == .archived {
                     let archived = store.archivedItems
                     if !archived.isEmpty {
@@ -199,6 +207,22 @@ struct HomeView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await store.refresh() }
+    }
+
+    private func staleBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(Theme.error)
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Retry") { Task { await store.refresh() } }
+                .font(.system(size: 13, weight: .semibold))
+                .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(Theme.error.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.cornerMedium))
     }
 
     @ViewBuilder
@@ -328,6 +352,20 @@ struct HomeView: View {
     }
 
     // MARK: Empty / missing-key states
+
+    private var refreshableEmptyState: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 12) {
+                    if let error = store.lastError { staleBanner(error) }
+                    emptyState
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: geometry.size.height)
+            }
+            .refreshable { await store.refresh() }
+        }
+    }
 
     private var emptyState: some View {
         VStack(spacing: 12) {
